@@ -1566,3 +1566,27 @@ class DataCollatorForPermutationLanguageModeling(DataCollatorMixin):
             ) & masked_indices[i]
 
         return inputs.astype(np.int64), perm_mask, target_mapping, labels.astype(np.int64)
+
+
+@dataclass
+class DataCollatorForInputMasking:
+    """
+    Data collator used for completion tasks where the inputs for the model are
+    masked allowing for the loss to be calculated on outputs (responses / labels).
+
+    ### TODO:
+    Add support for input and output template applications.
+    """
+
+    tokenizer: PreTrainedTokenizerBase
+    return_tensors: str = "pt"
+
+    def __call__(self, inputs, outputs, return_tensors=None, append_eos_token=True):
+        if return_tensors is None:
+            return_tensors = self.return_tensors
+
+
+        for input in inputs:
+            if append_eos_token:
+                input = input + self.tokenizer.eos_token_id
+
