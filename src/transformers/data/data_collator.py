@@ -1579,14 +1579,84 @@ class DataCollatorForInputMasking:
     """
 
     tokenizer: PreTrainedTokenizerBase
+    model: Optional[Any] = None
     return_tensors: str = "pt"
+    max_seq_length: Optional[int] = None
+    ignore_id: int = -100
+    padding: Union[bool, str, PaddingStrategy] = True
 
-    def __call__(self, inputs, outputs, return_tensors=None, append_eos_token=True):
+
+    def __call__(self, inputs: List[str], outputs: List[str], return_tensors=None, append_eos_token=True):
+
         if return_tensors is None:
             return_tensors = self.return_tensors
+        if return_tensors != "pt":
+            raise ValueError(f"Framework '{return_tensors}' not supported for this collator yet!")
 
+        import torch
 
-        for input in inputs:
+        features: List[Dict] = []
+
+        for input_text, output_text in zip(inputs, outputs):
+            # TODO: Add support for templating
+            processing_seq_text = input_text + output_text
             if append_eos_token:
-                input = input + self.tokenizer.eos_token_id
+                processing_seq_text = processing_seq_text + self.tokenizer.eos_token
+
+
+            # Tokenize only input (Note this is done separately for masking calculation below)
+            # Note: below 2 tokenization can be optimized by first tokenizing and then
+            # performing the tokenization. However, that can have side effects if tokenization
+            # of input is different than input + output. Specially in the case when we are not
+            # adding the template (for now) and thus difference between input and output isn't
+            # necessarily always clean
+            tokenized_input = self.tokenizer(
+                input_text,
+                return_tensors="pt",
+                max_length=self.max_seq_length,
+                truncation=True
+            )
+
+            tokenized_proc_seq = self.tokenizer(
+                processing_seq_text,
+                return_tensors='pt',
+                max_length=self.max_seq_length,
+                truncation=True)
+
+
+            input_ids = tokenized_proc_seq.input_ids
+            labels = input_ids.clone()
+
+
+            attention_mask = torch.ones_like(input_ids)
+
+            # TODO: Add support for handling pad_to_multiple_of
+            # NOTE: rest of the processing is similar to DataCollatorForSeq2Seq
+            padding_side = self.tokenizer.padding_side
+
+            # Mask input from labels with Ignore id
+            input_seq_len = tokenized_input.input_ids.shape[1]
+            remainder = [self.ignore_id] * (input_seq_len - len(labels))
+            if isinstance(labels, list):
+                labels = (
+                    labels + remainder if padding_side == "right" else remainder + labels
+                )
+            elif padding_side == "right":
+                labels = np.concatenate([labels, remainder]).astype(np.int64)
+            else:
+                labels = np.concatenate([remainder, labels]).astype(np.int64)
+
+            features.append({
+                'input_ids': input_ids.flatten(),
+                'labels': labels.flatten(),
+                'attention_mask': attention_mask.flatten(),
+            })
+
+        return self.tokenizer.pad(
+            features,
+            padding=self.padding,
+            max_length=self.max_seq_length,
+            return_tensors=return_tensors,
+        )
+
 
