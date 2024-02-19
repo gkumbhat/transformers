@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from .data_collator import (
+    DataCollatorForInputMasking,
     DataCollatorForLanguageModeling,
     DataCollatorForPermutationLanguageModeling,
     DataCollatorForSeq2Seq,
