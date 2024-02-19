@@ -1586,7 +1586,18 @@ class DataCollatorForInputMasking:
     padding: Union[bool, str, PaddingStrategy] = True
 
 
-    def __call__(self, inputs: List[str], outputs: List[str], return_tensors=None, append_eos_token=True):
+    def __call__(self, features, return_tensors=None, append_eos_token=True):
+        ## Features should be a dict containing "inputs" and "outputs" as keys
+        # with each containing list of strings as input / output correspondingly
+
+        separator_text = "\n"
+
+        # TODO: Make `inputs` and `outputs` keys parameterized
+        if "inputs" not in features or "outputs" not in features:
+            raise ValueError("`inputs` and `outputs` should be provided as keys in features")
+
+        inputs = features["inputs"]
+        outputs = features["outputs"]
 
         if return_tensors is None:
             return_tensors = self.return_tensors
@@ -1595,14 +1606,14 @@ class DataCollatorForInputMasking:
 
         import torch
 
-        features: List[Dict] = []
+        processed_features: List[Dict] = []
 
         for input_text, output_text in zip(inputs, outputs):
             # TODO: Add support for templating
-            processing_seq_text = input_text + output_text
+            processing_seq_text = input_text + separator_text + output_text
+
             if append_eos_token:
                 processing_seq_text = processing_seq_text + self.tokenizer.eos_token
-
 
             # Tokenize only input (Note this is done separately for masking calculation below)
             # Note: below 2 tokenization can be optimized by first tokenizing and then
@@ -1627,15 +1638,22 @@ class DataCollatorForInputMasking:
             input_ids = tokenized_proc_seq.input_ids
             labels = input_ids.clone()
 
+            # Mask input from labels with Ignore
+            labels[:, :tokenized_input.input_ids.shape[1]] = -100
 
             attention_mask = torch.ones_like(input_ids)
+
+            # Flatten everything
+            input_ids = input_ids.flatten()
+            labels = labels.flatten()
+            attention_mask = attention_mask.flatten()
 
             # TODO: Add support for handling pad_to_multiple_of
             # NOTE: rest of the processing is similar to DataCollatorForSeq2Seq
             padding_side = self.tokenizer.padding_side
 
-            # Mask input from labels with Ignore id
-            input_seq_len = tokenized_input.input_ids.shape[1]
+            input_seq_len = tokenized_proc_seq.input_ids.shape[1]
+
             remainder = [self.ignore_id] * (input_seq_len - len(labels))
             if isinstance(labels, list):
                 labels = (
@@ -1646,14 +1664,15 @@ class DataCollatorForInputMasking:
             else:
                 labels = np.concatenate([remainder, labels]).astype(np.int64)
 
-            features.append({
-                'input_ids': input_ids.flatten(),
-                'labels': labels.flatten(),
-                'attention_mask': attention_mask.flatten(),
+            processed_features.append({
+                'input_ids': input_ids,
+                'labels': labels,
+                'attention_mask': attention_mask,
             })
 
-        return self.tokenizer.pad(
-            features,
+        return pad_without_fast_tokenizer_warning(
+            self.tokenizer,
+            processed_features,
             padding=self.padding,
             max_length=self.max_seq_length,
             return_tensors=return_tensors,
